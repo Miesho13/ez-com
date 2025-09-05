@@ -3,6 +3,10 @@
 #include <windows.h>
 #include "uart.h"
 
+
+static OVERLAPPED ov;
+static void* _hcom;
+
 static void prv_com_info(DCB *dcb) {
     printf("COM INFO:\n");
     printf("dcb->BaudRate = %d\n", (int)dcb->BaudRate);
@@ -13,18 +17,18 @@ static void prv_com_info(DCB *dcb) {
 
 int uart_init(uart_context *self) {
 
-    self->_hcom = CreateFile(
+    _hcom = CreateFile(
         self->dev_name,
         GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
     
-    if (self->_hcom == INVALID_HANDLE_VALUE) {
+    if (_hcom == INVALID_HANDLE_VALUE) {
         fprintf (stderr, "CreateFile failed with err %lu.\n", GetLastError());
         return 1;
     }
 
-    memset(&self->ov, 0, sizeof(self->ov));
-    self->ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
     DCB dcb = {0};
     dcb.DCBlength = sizeof(DCB);
@@ -34,12 +38,12 @@ int uart_init(uart_context *self) {
     dcb.Parity   = self->parity; 
     dcb.StopBits = self->stop_bit;
 
-    if (!SetCommState(self->_hcom, &dcb)) {
+    if (!SetCommState(_hcom, &dcb)) {
         fprintf(stderr, "SetCommState with err (%lu).\n", GetLastError());
         return 2;
     }
 
-    if (!GetCommState(self->_hcom, &dcb)) {
+    if (!GetCommState(_hcom, &dcb)) {
         fprintf(stderr, "GetCommState with err (%lu).\n", GetLastError());
         return 3;
     }
@@ -50,9 +54,9 @@ int uart_init(uart_context *self) {
     timeouts.ReadTotalTimeoutMultiplier  = 0;
     timeouts.WriteTotalTimeoutConstant   = 0;
     timeouts.WriteTotalTimeoutMultiplier = 0;
-    SetCommTimeouts(self->_hcom, &timeouts);
+    SetCommTimeouts(_hcom, &timeouts);
 
-    SetCommMask(self->_hcom, EV_RXCHAR);
+    SetCommMask(_hcom, EV_RXCHAR);
     memset(self->rx_buffer, 0, sizeof(self->rx_buffer));
     self->rx_len = 0;
 
@@ -65,12 +69,12 @@ static void uart_clear_buffer(uart_context *self) {
 }
 
 
-int uart_read(uart_context *self, uint8_t* rx_buff, size_t rx_len) {
+int uart_read(uart_context *self) {
     DWORD event_mask;
 
     COMSTAT st = {0};
-    DWORD errs = 0;
-    ClearCommError(self->_hcom, &errs, &st);
+    DWORD   errs = 0;
+    ClearCommError(_hcom, &errs, &st);
 
     if (st.cbInQue == 0) {
         return 0;
@@ -89,20 +93,20 @@ int uart_read(uart_context *self, uint8_t* rx_buff, size_t rx_len) {
 
 
     int read_byte = 0;
-    ResetEvent(self->ov.hEvent);
+    ResetEvent(ov.hEvent);
     BOOL ok = ReadFile(
-        self->_hcom, self->rx_buffer + self->rx_len, 
-        to_read, &read_byte, &self->ov);
+        _hcom, self->rx_buffer + self->rx_len, 
+        to_read, (LPDWORD)&read_byte, &ov);
     if (!ok) {
         if (GetLastError() != ERROR_IO_PENDING) {
             fprintf(stderr, "ReadFile failed: %lu\n", GetLastError());
-            return -1;
+            return 1;
         }
-        return 0;
+        return 2;
     }
 
     self->rx_len += read_byte;
-    return (int)read_byte;
+    return 0;
 }
 
 void uart_pars_line(uart_context *self) {
@@ -127,5 +131,13 @@ void uart_pars_line(uart_context *self) {
     }
 }
 
+int uart_service(uart_context *self) {
+    (void)uart_read(self);
+    (void)uart_pars_line(self);
 
-// a a a a a a \r \t a a a a \r \t a a a a a a \r \t a a a \r \t a a 
+    return 0;
+}
+
+frame* uart_get_line(uart_context *self) {
+    return &self->frames[self->frames_count - 1];
+}
