@@ -10,6 +10,8 @@ set(ez-com-src
     "main.c"
     "app.c"
     "uart_impl.c"
+    "ui_platform_raylib.c"
+    "ui.c"
 )
 
 add_subdirectory(raylib)
